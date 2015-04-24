@@ -26,47 +26,66 @@
 # Dan Sajner <dsajner@covermymeds.com>
 #
 class redis::sentinel (
+  $packages       = $redis::params::packages,
   $version        = 'installed',
+  $service        = $redis::params::sentinel_service,
   $redis_clusters = undef,
-) {
+) inherits redis::params {
+
+  $redis_service = $redis::params::redis_service
+  $confdir       = $redis::params::confdir
 
   # Install the redis package
-  ensure_packages(['redis'], { 'ensure' => $version })
+  ensure_packages($packages, { 'ensure' => $version })
 
-  # Declare /etc/sentinel.conf here so we can manage ownership
-  file { '/etc/sentinel.conf':
+  # On Debian we have to create the redis-sentinel service and make
+  # sentinel.conf writable as this isn't handled by the package.
+  if $::osfamily == 'debian' {
+    file { "/etc/init.d/${service}":
+      ensure  => file,
+      owner   => 'root',
+      group   => 'root',
+      mode    => '0755',
+      source  => 'puppet:///modules/redis/redis-sentinel.init',
+      require => Package[$packages],
+      before  => Service[$service],
+    }
+  }
+
+  # Declare sentinel.conf here so we can manage ownership
+  file { "${confdir}/sentinel.conf":
     ensure  => present,
     owner   => 'redis',
     group   => 'root',
-    require => Package['redis'],
+    require => Package[$packages],
   }
 
   # Sentinel rewrites its config file so we lay this one down initially.
   # This allows us to manage the configuration file upon installation
   # and then never again.
-  file { '/etc/sentinel.conf.puppet':
+  file { "${confdir}/sentinel.conf.puppet":
     ensure  => present,
     owner   => 'redis',
     group   => 'root',
     mode    => '0644',
     content => template('redis/sentinel.conf.erb'),
-    require => Package['redis'],
+    require => Package[$packages],
     notify  => Exec['cp_sentinel_conf'],
   }
 
   exec { 'cp_sentinel_conf':
-    command     => '/bin/cp /etc/sentinel.conf.puppet /etc/sentinel.conf',
+    command     => "/bin/cp ${confdir}/sentinel.conf.puppet ${confdir}/sentinel.conf",
     refreshonly => true,
-    notify      => Service[sentinel],
+    notify      => Service[$service],
   }
 
   # Run it!
-  service { 'sentinel':
+  service { $service:
     ensure     => running,
     enable     => true,
     hasrestart => true,
     hasstatus  => true,
-    require    => Package['redis'],
+    require    => Package[$packages],
   }
 
   # Lay down the runtime configuration script
@@ -78,7 +97,7 @@ class redis::sentinel (
     group   => 'root',
     mode    => '0755',
     content => template('redis/sentinel_config.sh.erb'),
-    require => Package['redis'],
+    require => Package[$packages],
     notify  => Exec['configure_sentinel'],
   }
 
@@ -86,7 +105,7 @@ class redis::sentinel (
   exec { 'configure_sentinel':
     command     => $config_script,
     refreshonly => true,
-    require     => [ Service['sentinel'], File[$config_script] ],
+    require     => [ Service[$service], File[$config_script] ],
   }
 
 }

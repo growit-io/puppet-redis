@@ -26,11 +26,16 @@ class redis (
   $config             = {},
   $manage_persistence = false,
   $slaveof            = undef,
+  $bind               = '*',
+  $packages           = $redis::params::packages,
   $version            = 'installed',
-) {
+  $service            = $redis::params::redis_service,
+) inherits redis::params {
+
+  $confdir = $redis::params::confdir
 
   # Install the redis package
-  ensure_packages(['redis'], { 'ensure' => $version })
+  ensure_packages($packages, { 'ensure' => $version })
 
   # Define the data directory with proper ownership if provided
   if ! empty($config['dir']) {
@@ -38,46 +43,46 @@ class redis (
       ensure  => directory,
       owner   => 'redis',
       group   => 'redis',
-      require => Package['redis'],
+      require => Package[$packages],
       before  => Exec['configure_redis'],
     }
   }
 
-  # Declare /etc/redis.conf so that we can manage the ownership
-  file { '/etc/redis.conf':
+  # Declare redis.conf so that we can manage the ownership
+  file { "${confdir}/redis.conf":
     ensure  => present,
     owner   => 'redis',
     group   => 'root',
-    require => Package['redis'],
+    require => Package[$packages],
   }
 
   # Lay down intermediate config file and copy it in with a 'cp' exec resource.
   # Redis rewrites its config file with additional state information so we only
   # want to do this the first time redis starts so we can at least get it 
   # daemonized and assign a master node if applicable.
-  file { '/etc/redis.conf.puppet':
+  file { "${confdir}/redis.conf.puppet":
     ensure  => present,
     owner   => redis,
     group   => root,
     mode    => '0644',
     content => template('redis/redis.conf.puppet.erb'),
-    require => Package['redis'],
+    require => Package[$packages],
     notify  => Exec['cp_redis_config'],
   }
 
   exec { 'cp_redis_config':
-    command     => '/bin/cp -p /etc/redis.conf.puppet /etc/redis.conf',
+    command     => "/bin/cp -p ${confdir}/redis.conf.puppet ${confdir}/redis.conf",
     refreshonly => true,
-    notify      => Service[redis],
+    notify      => Service[$service],
   }
 
   # Run it!
-  service { 'redis':
+  service { $service:
     ensure     => running,
     enable     => true,
     hasrestart => true,
     hasstatus  => true,
-    require    => Package['redis'],
+    require    => Package[$packages],
   }
 
   # Lay down the configuration script,  Content based on the config hash.
@@ -89,7 +94,7 @@ class redis (
     group   => 'root',
     mode    => '0755',
     content => template('redis/redis_config.sh.erb'),
-    require => Package['redis'],
+    require => Package[$packages],
     notify  => Exec['configure_redis'],
   }
     
@@ -97,7 +102,7 @@ class redis (
   exec { 'configure_redis':
     command     => $config_script,
     refreshonly => true,
-    require     => [ Service['redis'], File[$config_script] ],
+    require     => [ Service[$service], File[$config_script] ],
   }
 
   # In an HA setup we choose to only persist data to disk on
